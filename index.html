@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Interactive 2D flexure mechanics simulator using beam finite elements." />
+  <title>Flexure Sim</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <div class="eyebrow">2D FLEXURE MECHANICS</div>
+      <h1>Flexure Sim</h1>
+      <p>Corotational beam FEM for compliant mechanisms — interactive, parametric, and inspectable.</p>
+    </div>
+    <div class="solver-pill" id="solverPill">Ready</div>
+  </header>
+
+  <main class="layout">
+    <aside class="panel controls-panel" aria-label="Simulation controls">
+      <section>
+        <h2>Example</h2>
+        <div class="segmented" role="group" aria-label="Flexure example">
+          <button class="example-btn active" data-example="beam" type="button">Resonating beam</button>
+          <button class="example-btn" data-example="crossed" type="button">Crossed-beam hinge</button>
+          <button class="example-btn" data-example="parallelogram" type="button">Parallelogram</button>
+        </div>
+        <p class="help" id="exampleHelp"></p>
+      </section>
+
+      <section>
+        <h2>Geometry</h2>
+        <label class="field">
+          <span>Flexure length <output id="lengthOut"></output></span>
+          <input id="length" type="range" min="20" max="160" step="1" value="80" />
+        </label>
+        <label class="field">
+          <span>Thickness <output id="thicknessOut"></output></span>
+          <input id="thickness" type="range" min="0.15" max="3" step="0.05" value="0.6" />
+        </label>
+        <label class="field">
+          <span>Out-of-plane width <output id="widthOut"></output></span>
+          <input id="width" type="range" min="2" max="30" step="0.5" value="10" />
+        </label>
+        <label class="field conditional" id="spacingField">
+          <span>Beam spacing <output id="spacingOut"></output></span>
+          <input id="spacing" type="range" min="6" max="70" step="1" value="30" />
+        </label>
+        <label class="field">
+          <span>Mesh density <output id="meshOut"></output></span>
+          <input id="mesh" type="range" min="4" max="28" step="1" value="12" />
+        </label>
+      </section>
+
+      <section>
+        <h2>Material</h2>
+        <label class="select-field">
+          <span>Preset</span>
+          <select id="material">
+            <option value="al7075">Al 7075-T6</option>
+            <option value="steel17">17-4PH steel</option>
+            <option value="ti64">Ti-6Al-4V</option>
+          </select>
+        </label>
+        <div class="mini-grid">
+          <div><span>E</span><strong id="eValue"></strong></div>
+          <div><span>ρ</span><strong id="rhoValue"></strong></div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Excitation</h2>
+        <label class="field">
+          <span id="loadLabel">Tip force <output id="loadOut"></output></span>
+          <input id="load" type="range" min="-8" max="8" step="0.1" value="0.2" />
+        </label>
+        <label class="field">
+          <span>Visual deformation scale <output id="scaleOut"></output></span>
+          <input id="deformScale" type="range" min="0.25" max="8" step="0.25" value="1" />
+        </label>
+        <label class="switch-row">
+          <input id="animateMode" type="checkbox" checked />
+          <span>Animate first vibration mode</span>
+        </label>
+        <p class="help">Mode animation is deliberately slowed for visibility. The displayed frequency is the physical eigenfrequency.</p>
+      </section>
+    </aside>
+
+    <section class="workspace" aria-label="Flexure visualization">
+      <div class="canvas-card">
+        <div class="canvas-toolbar">
+          <div>
+            <strong id="sceneTitle">Resonating cantilever</strong>
+            <span id="sceneSubtitle">large-rotation static solve + first linear mode</span>
+          </div>
+          <div class="legend" aria-label="Stress legend">
+            <span>low</span><div class="stress-bar"></div><span>high stress</span>
+          </div>
+        </div>
+        <svg id="simSvg" viewBox="0 0 900 560" role="img" aria-label="Finite element flexure deformation view"></svg>
+        <div class="canvas-footer">
+          <span id="interactionHint">Parameters update the FEM solution live.</span>
+          <span id="warningText"></span>
+        </div>
+      </div>
+
+      <div class="metrics" aria-live="polite">
+        <article><span>Max displacement</span><strong id="dispMetric">—</strong></article>
+        <article><span>Max stress</span><strong id="stressMetric">—</strong></article>
+        <article><span>First natural frequency</span><strong id="freqMetric">—</strong></article>
+        <article><span id="stiffnessLabel">Tip stiffness</span><strong id="stiffMetric">—</strong></article>
+      </div>
+
+      <div class="detail-grid">
+        <section class="panel theory-panel">
+          <h2>What the solver is doing</h2>
+          <div class="equation-row"><span>Section</span><code>A = wt, I = wt³/12</code></div>
+          <div class="equation-row"><span>Element DOFs</span><code>[u₁, v₁, θ₁, u₂, v₂, θ₂]</code></div>
+          <div class="equation-row"><span>Static</span><code>Kₜ(q) Δq = F − Fᵢₙₜ(q)</code></div>
+          <div class="equation-row"><span>Modal</span><code>K φ = ω² M φ</code></div>
+          <p id="theoryText"></p>
+        </section>
+        <section class="panel validation-panel">
+          <h2>Numerical checks</h2>
+          <div id="validationContent"></div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <strong>Scope:</strong> 2D, linear-elastic slender flexures; corotational kinematics permit large rigid-body rotation while element strains remain small. No contact, plasticity, fillet stress concentration, out-of-plane effects, or shear deformation in v1.
+  </footer>
+
+  <script type="module" src="./src/app.js"></script>
+</body>
+</html>
