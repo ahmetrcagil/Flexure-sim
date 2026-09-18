@@ -1,0 +1,124 @@
+import { makeMaterial, creepEquivalentModulus, buildModel as baseBuildModel, solveStatic, firstMode, modelMetrics, beamAnalytical, deformedElementPoints } from './solver.js';
+
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const svg=$('#simSvg');
+const state={example:'beam',model:null,result:null,mode:null,metrics:null,rotStiffness:NaN,raf:null,lastSolveToken:0,loadByExample:{beam:0.2,crossed:20,parallelogram:1,trapezoid:1}};
+const ui={
+  length:$('#length'),thickness:$('#thickness'),width:$('#width'),spacing:$('#spacing'),mesh:$('#mesh'),material:$('#material'),load:$('#load'),deformScale:$('#deformScale'),animateMode:$('#animateMode'),creepEnabled:$('#creepEnabled'),creepTime:$('#creepTime'),
+  lengthOut:$('#lengthOut'),thicknessOut:$('#thicknessOut'),widthOut:$('#widthOut'),spacingOut:$('#spacingOut'),meshOut:$('#meshOut'),loadOut:$('#loadOut'),scaleOut:$('#scaleOut'),
+  loadLabel:$('#loadLabel'),spacingField:$('#spacingField'),solverPill:$('#solverPill'),sceneTitle:$('#sceneTitle'),sceneSubtitle:$('#sceneSubtitle'),exampleHelp:$('#exampleHelp'),theoryText:$('#theoryText'),validationContent:$('#validationContent'),warningText:$('#warningText'),interactionHint:$('#interactionHint'),creepPanel:$('#creepPanel'),creepTimeOut:$('#creepTimeOut'),creepModelNote:$('#creepModelNote'),creepEffE:$('#creepEffE'),creepFactor:$('#creepFactor'),
+  dispMetric:$('#dispMetric'),stressMetric:$('#stressMetric'),freqMetric:$('#freqMetric'),stiffMetric:$('#stiffMetric'),stiffnessLabel:$('#stiffnessLabel'),rotStiffMetric:$('#rotStiffMetric'),eValue:$('#eValue'),rhoValue:$('#rhoValue')
+};
+const exampleText={
+  beam:{title:'Resonating cantilever',subtitle:'large-rotation static solve + first linear mode',help:'A clamped-free leaf beam. The static tip-force solution and first bending eigenmode can be checked against closed-form Euler–Bernoulli results.',theory:'Each leaf is discretized into 2-node frame elements. The corotational formulation removes rigid-body translation/rotation from each element before computing axial and bending strain energy.'},
+  crossed:{title:'Crossed-beam flexure hinge',subtitle:'two crossing leaves, mechanically unjoined at the crossing',help:'Two leaf springs cross geometrically but are not connected at the intersection. A stiff moving stage joins their right ends; a torque rotates the stage around the virtual pivot.',theory:'The crossing leaves are separate FEM chains and may geometrically intersect without sharing a node.'},
+  parallelogram:{title:'Parallelogram flexure stage',subtitle:'paired parallel leaves suppress stage rotation',help:'Two parallel leaf springs connect ground to a comparatively stiff output stage. A vertical force translates the stage while the paired geometry strongly suppresses rotation.',theory:'Both leaves are elastic beam chains and the output bar is modeled as a much thicker member of the same material.'},
+  trapezoid:{title:'Trapezoidal flexure stage',subtitle:'converging leaves couple translation and rotation',help:'Two symmetric nonparallel leaves connect a wide fixed base to a narrower moving stage. Unlike a parallelogram, the converging geometry deliberately introduces translation–rotation coupling.',theory:'The left anchor spacing is the selected beam spacing; the moving-stage spacing is 55% of it. Both angled leaves are meshed as ordinary corotational beam elements, so the coupling emerges from geometry rather than a hard-coded motion law.'}
+};
+
+function params(){
+  const mat=makeMaterial(ui.material.value);
+  const creepSeconds=ui.creepEnabled?.checked?Math.max(0,Math.min(1800,+ui.creepTime.value)):0;
+  const creep=creepEquivalentModulus(mat,creepSeconds);
+  return {length:+ui.length.value/1000,thickness:+ui.thickness.value/1000,width:+ui.width.value/1000,spacing:+ui.spacing.value/1000,mesh:+ui.mesh.value,load:state.example==='crossed'?+ui.load.value/1000:+ui.load.value,E:creep.E,rho:mat.rho,material:mat,creepSeconds,creep};
+}
+function flexProps(p){const A=p.width*p.thickness,I=p.width*p.thickness**3/12;return {E:p.E,rho:p.rho,A,I,t:p.thickness,kind:'flexure'};}
+function stageProps(p){const t=Math.max(8*p.thickness,.18*p.spacing),A=p.width*t,I=p.width*t**3/12;return {E:p.E,rho:p.rho,A,I,t,kind:'stage'};}
+function addPolyline(m,a,b,n,props,reuseStart=null,reuseEnd=null){const ids=[];for(let k=0;k<=n;k++){if(k===0&&reuseStart!==null){ids.push(reuseStart);continue;}if(k===n&&reuseEnd!==null){ids.push(reuseEnd);continue;}const s=k/n,id=m.nodes.length;m.nodes.push({x:a.x+(b.x-a.x)*s,y:a.y+(b.y-a.y)*s});ids.push(id);}for(let k=0;k<n;k++)m.elements.push({i:ids[k],j:ids[k+1],...props});return ids;}
+function fixNode(m,id){m.fixed.add(3*id);m.fixed.add(3*id+1);m.fixed.add(3*id+2);}
+function buildTrapezoid(p){
+  const m={nodes:[],elements:[],fixed:new Set(),loads:[],meta:{}};
+  const y0=p.spacing/2,y1=.55*p.spacing/2;
+  const bottom=addPolyline(m,{x:0,y:-y0},{x:p.length,y:-y1},p.mesh,flexProps(p));
+  const top=addPolyline(m,{x:0,y:y0},{x:p.length,y:y1},p.mesh,flexProps(p));
+  fixNode(m,bottom[0]);fixNode(m,top[0]);
+  const br=bottom.at(-1),tr=top.at(-1);
+  addPolyline(m,m.nodes[br],m.nodes[tr],1,stageProps(p),br,tr);
+  m.loads.push({node:tr,fx:0,fy:.5*p.load,m:0},{node:br,fx:0,fy:.5*p.load,m:0});
+  m.meta={kind:'trapezoid',outputNodes:[tr,br],flexureLength:p.length,loadMeasure:p.load};
+  return m;
+}
+function buildModel(kind,p){return kind==='trapezoid'?buildTrapezoid(p):baseBuildModel(kind,p);}
+
+function configureForExample(){
+  const e=state.example,t=exampleText[e];
+  ui.sceneTitle.textContent=t.title;ui.sceneSubtitle.textContent=t.subtitle;ui.exampleHelp.textContent=t.help;ui.theoryText.textContent=t.theory;
+  ui.spacingField.classList.toggle('hidden',e==='beam');
+  ui.stiffnessLabel.textContent=e==='crossed'?'Rotational stiffness (loaded)':'Output stiffness';
+  if(e==='beam'){ui.load.min='-8';ui.load.max='8';ui.load.step='.1';}
+  else if(e==='crossed'){ui.load.min='-1000';ui.load.max='1000';ui.load.step='10';}
+  else{ui.load.min='-20';ui.load.max='20';ui.load.step='.25';}
+  ui.load.value=state.loadByExample[e];syncOutputs();
+}
+function syncOutputs(){
+  const p=params();
+  ui.lengthOut.textContent=`${(+ui.length.value).toFixed(0)} mm`;ui.thicknessOut.textContent=`${(+ui.thickness.value).toFixed(2)} mm`;ui.widthOut.textContent=`${(+ui.width.value).toFixed(1)} mm`;ui.spacingOut.textContent=`${(+ui.spacing.value).toFixed(0)} mm`;ui.meshOut.textContent=`${ui.mesh.value} / leaf`;ui.scaleOut.textContent=`${(+ui.deformScale.value).toFixed(2)}×`;
+  ui.loadOut.textContent=state.example==='crossed'?`${(+ui.load.value).toFixed(0)} N·mm`:`${(+ui.load.value).toFixed(2)} N`;
+  ui.eValue.textContent=`${(p.material.E/1e9).toFixed(2)} GPa`;ui.rhoValue.textContent=`${p.rho.toFixed(0)} kg/m³`;
+  const hasCreep=!!p.material.creep;ui.creepPanel?.classList.toggle('disabled-panel',!hasCreep);if(ui.creepEnabled){ui.creepEnabled.disabled=!hasCreep;if(!hasCreep)ui.creepEnabled.checked=false;}if(ui.creepTime)ui.creepTime.disabled=!hasCreep||!ui.creepEnabled.checked;if(ui.creepTimeOut)ui.creepTimeOut.textContent=formatDuration(p.creepSeconds);if(ui.creepEffE)ui.creepEffE.textContent=hasCreep?`${(p.E/1e9).toFixed(3)} GPa`:'—';if(ui.creepFactor)ui.creepFactor.textContent=hasCreep?`${p.creep.factor.toFixed(3)}×`:'1.000×';if(ui.creepModelNote)ui.creepModelNote.textContent=hasCreep?'Burgers model; calibrated for untreated 0°-raster FDM PLA at 27 °C, 8–12 MPa, 0–1800 s.':'No room-temperature creep law is assigned to this preset in v1.';
+  ui.loadLabel.childNodes[0].nodeValue=state.example==='crossed'?'Applied torque ':'Applied force ';
+}
+
+function rotationalProbe(kind,p){
+  const probe=buildModel(kind,p),M=1e-4;
+  probe.loads=[];
+  const ids=probe.meta.outputNodes;
+  for(const id of ids)probe.loads.push({node:id,fx:0,fy:0,m:M/ids.length});
+  const r=solveStatic(probe,{steps:3,maxIter:18});
+  if(!r.converged)return NaN;
+  let th=0;for(const id of ids)th+=r.q[3*id+2];th/=ids.length;
+  return Math.abs(M)/Math.max(1e-15,Math.abs(th));
+}
+let solveTimer=null;
+function queueSolve(){syncOutputs();clearTimeout(solveTimer);ui.solverPill.textContent='Solving…';ui.solverPill.className='solver-pill solving';solveTimer=setTimeout(runSolve,45);}
+function runSolve(){
+  const token=++state.lastSolveToken,p=params();
+  try{
+    const model=buildModel(state.example,p),result=solveStatic(model,{steps:6,maxIter:20});
+    const modalP=p.creep?.active?{...p,E:p.material.E}:p,modalModel=buildModel(state.example,modalP),mode=firstMode(modalModel);
+    const rotK=rotationalProbe(state.example,p);
+    if(token!==state.lastSolveToken)return;
+    state.model=model;state.result=result;state.mode=mode;state.metrics=modelMetrics(model,result,mode);state.rotStiffness=rotK;
+    updateMetrics();updateValidation(p);updateWarnings(p);ui.solverPill.textContent=result.converged?'Converged':'Not converged';ui.solverPill.className=`solver-pill ${result.converged?'good':'bad'}`;draw(performance.now());ensureAnimation();
+  }catch(err){console.error(err);ui.solverPill.textContent='Solver error';ui.solverPill.className='solver-pill bad';ui.warningText.textContent='The current parameter set could not be solved.';}
+}
+function updateMetrics(){
+  const m=state.metrics;ui.dispMetric.textContent=formatLength(m.maxDisp);ui.stressMetric.textContent=formatStress(m.maxStress);ui.freqMetric.textContent=Number.isFinite(m.frequency)?formatFreq(m.frequency):'—';
+  if(state.example==='crossed')ui.stiffMetric.textContent=Number.isFinite(m.stiffness)?`${m.stiffness.toFixed(3)} N·m/rad`:'—';else ui.stiffMetric.textContent=Number.isFinite(m.stiffness)?`${m.stiffness.toFixed(0)} N/m`:'—';
+  if(ui.rotStiffMetric)ui.rotStiffMetric.textContent=Number.isFinite(state.rotStiffness)?formatRotStiff(state.rotStiffness):'—';
+}
+function updateValidation(p){
+  if(state.example==='beam'){
+    const a=beamAnalytical(p),aModal=beamAnalytical({...p,E:p.material.E}),tip=state.model.meta.outputNodes[0],femTip=state.result.q[3*tip+1],eDisp=Math.abs((femTip-a.tip)/Math.max(1e-30,a.tip))*100,eFreq=Math.abs((state.mode.frequency-aModal.f1)/aModal.f1)*100;
+    ui.validationContent.innerHTML=`<div class="check"><span>Tip deflection vs. <code>FL³/3EI</code></span><strong class="${eDisp<.5?'good-text':'warn-text'}">${eDisp.toFixed(3)}%</strong><small>reference: ${formatLength(a.tip)}; FEM: ${formatLength(femTip)}</small></div><div class="check"><span>First mode vs. cantilever closed form</span><strong class="${eFreq<.5?'good-text':'warn-text'}">${eFreq.toFixed(3)}%</strong><small>reference: ${formatFreq(aModal.f1)}; FEM: ${formatFreq(state.mode.frequency)}</small></div><div class="check"><span>Rotational probe</span><strong>${formatRotStiff(state.rotStiffness)}</strong><small>small-signal moment applied independently of the displayed load</small></div>`;
+  }else{
+    const slender=p.length/p.thickness;
+    ui.validationContent.innerHTML=`<div class="check"><span>Nonlinear equilibrium</span><strong class="${state.result.converged?'good-text':'warn-text'}">${state.result.converged?'converged':'not converged'}</strong><small>${state.result.iterations} Newton iterations over load steps</small></div><div class="check"><span>Leaf slenderness <code>L/t</code></span><strong class="${slender>15?'good-text':'warn-text'}">${slender.toFixed(1)}</strong><small>Euler–Bernoulli is most appropriate for slender leaves.</small></div><div class="check"><span>Rotational probe</span><strong>${formatRotStiff(state.rotStiffness)}</strong><small>small-signal output stiffness about z</small></div>`;
+  }
+}
+function updateWarnings(p){const slender=p.length/p.thickness,strainLike=state.metrics.maxStress/p.E,w=[];if(slender<12)w.push('low L/t: shear deformation omitted');if(strainLike>.005)w.push('high elastic strain: beam assumptions may be stressed');if(p.creep?.active&&p.material.creep){const sm=state.metrics.maxStress/1e6,[lo,hi]=p.material.creep.stressRangeMPa;if(sm<lo||sm>hi)w.push(`PLA creep fit calibrated at ${lo}–${hi} MPa; current peak is ${sm.toFixed(1)} MPa`);}if(!state.result.converged)w.push('nonlinear equilibrium not reached');ui.warningText.textContent=w.join(' · ');}
+function ensureAnimation(){if(state.raf)cancelAnimationFrame(state.raf);if(ui.animateMode.checked)state.raf=requestAnimationFrame(frame);else{state.raf=null;draw(performance.now());}}
+function frame(t){draw(t);if(ui.animateMode.checked)state.raf=requestAnimationFrame(frame);else state.raf=null;}
+function draw(t){
+  if(!state.model)return;const model=state.model,result=state.result,mode=state.mode,p=params(),W=900,H=560,pad=80,allX=model.nodes.map(n=>n.x),allY=model.nodes.map(n=>n.y),xMin=Math.min(...allX),xMax=Math.max(...allX),yMin=Math.min(...allY),yMax=Math.max(...allY),geomW=Math.max(1e-6,xMax-xMin),geomH=Math.max(p.thickness*8,yMax-yMin,p.length*.25),sc=Math.min((W-2*pad)/geomW,(H-2*pad)/geomH),ox=pad-xMin*sc,oy=H/2+(yMin+yMax)*.5*sc,map=pt=>({x:ox+pt.x*sc,y:oy-pt.y*sc}),qVis=result.q.slice(),staticScale=+ui.deformScale.value;
+  let modeAmp=0;if(ui.animateMode.checked&&mode.ok){const reduced=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches,phase=reduced?1:Math.sin(t*.001*2*Math.PI*.65);modeAmp=.065*p.length*phase;}
+  for(let i=0;i<qVis.length;i+=3){qVis[i]=result.q[i]*staticScale+mode.mode[i]*modeAmp;qVis[i+1]=result.q[i+1]*staticScale+mode.mode[i+1]*modeAmp;qVis[i+2]=result.q[i+2]*staticScale+mode.mode[i+2]*modeAmp;}
+  const maxStress=Math.max(1,...result.stresses.filter((_,i)=>model.elements[i].kind==='flexure')),items=[];items.push(`<defs><pattern id="grid" width="36" height="36" patternUnits="userSpaceOnUse"><path d="M36 0H0V36" fill="none" stroke="#182332" stroke-width="1"/></pattern></defs><rect width="900" height="560" fill="url(#grid)"/>`);
+  for(const e of model.elements){const a=map(model.nodes[e.i]),b=map(model.nodes[e.j]);items.push(`<line x1="${a.x.toFixed(2)}" y1="${a.y.toFixed(2)}" x2="${b.x.toFixed(2)}" y2="${b.y.toFixed(2)}" stroke="#526170" stroke-opacity=".35" stroke-width="2" stroke-dasharray="6 6"/>`);}
+  model.elements.forEach((e,idx)=>{const pts=deformedElementPoints(model,e,qVis,1,14).map(map),d=pts.map((pt,k)=>`${k?'L':'M'}${pt.x.toFixed(2)},${pt.y.toFixed(2)}`).join(' '),ratio=e.kind==='stage'?0:Math.min(1,result.stresses[idx]/maxStress),color=e.kind==='stage'?'#a7b3c1':stressColor(ratio),sw=e.kind==='stage'?Math.max(5,e.t*sc*.55):Math.max(2,Math.min(11,e.t*sc));items.push(`<path d="${d}" fill="none" stroke="${color}" stroke-width="${sw.toFixed(2)}" stroke-linecap="round"/>`);});
+  const fixedNodes=[...new Set([...model.fixed].map(d=>Math.floor(d/3)))];for(const n of fixedNodes){const pt=map(model.nodes[n]);items.push(`<g transform="translate(${pt.x.toFixed(2)} ${pt.y.toFixed(2)})"><line x1="0" y1="-18" x2="0" y2="18" stroke="#d7e1ea" stroke-width="4"/><path d="M0 -16l-16 -10M0 -8l-16 -10M0 0l-16 -10M0 8l-16 -10M0 16l-16 -10" stroke="#65778a" stroke-width="2"/></g>`);}
+  if(state.example==='crossed'){const cp=map({x:p.length/2,y:0});items.push(`<circle cx="${cp.x}" cy="${cp.y}" r="9" fill="#0b1017" stroke="#71859a" stroke-dasharray="3 3"/><text x="${cp.x+13}" y="${cp.y-11}" fill="#8fa0b5" font-size="11">no joint</text>`);}
+  items.push(loadGraphic(model,qVis,map,p));const barMm=niceLength(p.length*1000/4),barPx=barMm/1000*sc;items.push(`<g transform="translate(70 505)"><line x1="0" y1="0" x2="${barPx.toFixed(1)}" y2="0" stroke="#d9e4ed" stroke-width="2"/><line x1="0" y1="-5" x2="0" y2="5" stroke="#d9e4ed"/><line x1="${barPx.toFixed(1)}" y1="-5" x2="${barPx.toFixed(1)}" y2="5" stroke="#d9e4ed"/><text x="${(barPx/2).toFixed(1)}" y="20" text-anchor="middle" fill="#8fa0b5" font-size="11">${barMm} mm</text></g>`);svg.innerHTML=items.join('');
+}
+function loadGraphic(model,q,map,p){if(state.example==='crossed'){const ns=model.meta.outputNodes.map(i=>({x:model.nodes[i].x+q[3*i],y:model.nodes[i].y+q[3*i+1]})),c=map({x:(ns[0].x+ns[1].x)/2,y:(ns[0].y+ns[1].y)/2}),sign=Math.sign(p.load)||1;return `<g><path d="M${c.x-36},${c.y} A36,36 0 1 ${sign>0?1:0} ${c.x+18},${c.y-31}" fill="none" stroke="#ffcf75" stroke-width="3"/><path d="M${c.x+18},${c.y-31} l${sign>0?-2:10},12 l${sign>0?12:-12},2" fill="none" stroke="#ffcf75" stroke-width="3"/><text x="${c.x+45}" y="${c.y-35}" fill="#ffcf75" font-size="12">M</text></g>`;}const ids=model.meta.outputNodes;let px=0,py=0;for(const i of ids){px+=model.nodes[i].x+q[3*i];py+=model.nodes[i].y+q[3*i+1];}const pt=map({x:px/ids.length,y:py/ids.length}),sign=Math.sign(p.load)||1,y2=pt.y-sign*48;return `<g><line x1="${pt.x}" y1="${y2}" x2="${pt.x}" y2="${pt.y}" stroke="#ffcf75" stroke-width="3"/><path d="M${pt.x},${pt.y} l-7,${-sign*12} M${pt.x},${pt.y} l7,${-sign*12}" stroke="#ffcf75" stroke-width="3"/><text x="${pt.x+12}" y="${(y2+pt.y)/2}" fill="#ffcf75" font-size="12">F</text></g>`;}
+function stressColor(r){const stops=[[101,200,255],[142,231,176],[255,211,110],[255,117,131]],x=Math.max(0,Math.min(.9999,r))*3,i=Math.floor(x),f=x-i,a=stops[i],b=stops[Math.min(3,i+1)];return `rgb(${Math.round(a[0]+(b[0]-a[0])*f)},${Math.round(a[1]+(b[1]-a[1])*f)},${Math.round(a[2]+(b[2]-a[2])*f)})`;}
+function formatDuration(s){return s<60?`${s.toFixed(0)} s`:`${(s/60).toFixed(s<600?1:0)} min`;}
+function niceLength(mm){const p=10**Math.floor(Math.log10(Math.max(1e-9,mm))),n=mm/p;return(n<2?1:n<5?2:n<10?5:10)*p;}
+function formatLength(m){const a=Math.abs(m);if(a<1e-6)return`${(m*1e9).toFixed(1)} nm`;if(a<1e-3)return`${(m*1e6).toFixed(2)} µm`;return`${(m*1e3).toFixed(3)} mm`;}
+function formatStress(pa){return pa<1e6?`${(pa/1e3).toFixed(1)} kPa`:`${(pa/1e6).toFixed(1)} MPa`;}
+function formatFreq(hz){return hz>=1000?`${(hz/1000).toFixed(2)} kHz`:`${hz.toFixed(1)} Hz`;}
+function formatRotStiff(k){if(!Number.isFinite(k))return'—';if(k<1e-3)return`${(k*1e6).toFixed(2)} µN·m/rad`;if(k<1)return`${(k*1e3).toFixed(3)} mN·m/rad`;return`${k.toFixed(3)} N·m/rad`;}
+
+$$('.example-btn').forEach(btn=>btn.addEventListener('click',()=>{state.loadByExample[state.example]=+ui.load.value;state.example=btn.dataset.example;$$('.example-btn').forEach(b=>b.classList.toggle('active',b===btn));configureForExample();queueSolve();}));
+[ui.length,ui.thickness,ui.width,ui.spacing,ui.mesh,ui.material,ui.load,ui.deformScale,ui.creepTime].forEach(el=>el.addEventListener('input',()=>{if(el===ui.load)state.loadByExample[state.example]=+ui.load.value;if(el===ui.deformScale&&state.model){syncOutputs();draw(performance.now());return;}queueSolve();}));
+ui.animateMode.addEventListener('change',ensureAnimation);ui.creepEnabled?.addEventListener('change',queueSolve);configureForExample();runSolve();
