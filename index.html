@@ -25,6 +25,7 @@
           <button class="example-btn active" data-example="beam" type="button">Resonating beam</button>
           <button class="example-btn" data-example="crossed" type="button">Crossed-beam hinge</button>
           <button class="example-btn" data-example="parallelogram" type="button">Parallelogram</button>
+          <button class="example-btn" data-example="trapezoid" type="button">Trapezoidal stage</button>
         </div>
         <p class="help" id="exampleHelp"></p>
       </section>
@@ -128,6 +129,7 @@
         <article><span>Max stress</span><strong id="stressMetric">—</strong></article>
         <article><span>First natural frequency</span><strong id="freqMetric">—</strong></article>
         <article><span id="stiffnessLabel">Tip stiffness</span><strong id="stiffMetric">—</strong></article>
+        <article><span>Rotational stiffness</span><strong id="rotStiffMetric">—</strong></article>
       </div>
 
       <div class="detail-grid">
@@ -151,6 +153,6 @@
     <strong>Scope:</strong> 2D, linear-elastic slender flexures; corotational kinematics permit large rigid-body rotation while element strains remain small. No contact, plasticity, fillet stress concentration, out-of-plane effects, or shear deformation in v1.
   </footer>
 
-  <script type="module" src="./src/app.js"></script>
+  <script type="module" src="./src/app-v2.js"></script>
 </body>
 </html>
