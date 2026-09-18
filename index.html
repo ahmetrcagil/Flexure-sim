@@ -61,13 +61,30 @@
             <option value="al7075">Al 7075-T6</option>
             <option value="steel17">17-4PH steel</option>
             <option value="ti64">Ti-6Al-4V</option>
-            <option value="pla">PLA (nominal bulk)</option>
+            <option value="pla">PLA (FDM 0°, 27 °C)</option>
           </select>
         </label>
         <div class="mini-grid">
           <div><span>E</span><strong id="eValue"></strong></div>
           <div><span>ρ</span><strong id="rhoValue"></strong></div>
         </div>
+      </section>
+
+      <section id="creepPanel">
+        <h2>Creep / time under load</h2>
+        <label class="switch-row">
+          <input id="creepEnabled" type="checkbox" />
+          <span>Simulate static creep</span>
+        </label>
+        <label class="field">
+          <span>Time under constant load <output id="creepTimeOut">0 s</output></span>
+          <input id="creepTime" type="range" min="0" max="1800" step="10" value="0" disabled />
+        </label>
+        <div class="mini-grid">
+          <div><span>Effective E</span><strong id="creepEffE">—</strong></div>
+          <div><span>Compliance factor</span><strong id="creepFactor">1.000×</strong></div>
+        </div>
+        <p class="help" id="creepModelNote">No room-temperature creep law is assigned to this preset in v1.</p>
       </section>
 
       <section>
