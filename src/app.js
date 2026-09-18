@@ -96,7 +96,8 @@ function runSolve(){
   try{
     const model=buildModel(state.example,p);
     const result=solveStatic(model,{steps:6,maxIter:20});
-    const mode=firstMode(model);
+    const modalModel=p.creep?.active ? buildModel(state.example,{...p,E:p.material.E}) : model;
+    const mode=firstMode(modalModel);
     if(token!==state.lastSolveToken)return;
     state.model=model; state.result=result; state.mode=mode; state.metrics=modelMetrics(model,result,mode);
     updateMetrics(p); updateValidation(p); updateWarnings(p);
@@ -122,13 +123,13 @@ function updateMetrics(p){
 
 function updateValidation(p){
   if(state.example==='beam'){
-    const a=beamAnalytical(p), tipNode=state.model.meta.outputNodes[0];
+    const a=beamAnalytical(p), aModal=beamAnalytical({...p,E:p.material.E}), tipNode=state.model.meta.outputNodes[0];
     const femTip=state.result.q[3*tipNode+1];
     const eDisp=Math.abs((femTip-a.tip)/Math.max(1e-30,a.tip))*100;
-    const eFreq=Math.abs((state.mode.frequency-a.f1)/a.f1)*100;
+    const eFreq=Math.abs((state.mode.frequency-aModal.f1)/aModal.f1)*100;
     ui.validationContent.innerHTML=`
       <div class="check"><span>Tip deflection vs. <code>FL³/3EI</code></span><strong class="${eDisp<0.5?'good-text':'warn-text'}">${eDisp.toFixed(3)}%</strong><small>small-deflection reference: ${formatLength(a.tip)}; FEM: ${formatLength(femTip)}</small></div>
-      <div class="check"><span>First mode vs. cantilever closed form</span><strong class="${eFreq<0.5?'good-text':'warn-text'}">${eFreq.toFixed(3)}%</strong><small>reference: ${formatFreq(a.f1)}; FEM: ${formatFreq(state.mode.frequency)}</small></div>
+      <div class="check"><span>First mode vs. cantilever closed form</span><strong class="${eFreq<0.5?'good-text':'warn-text'}">${eFreq.toFixed(3)}%</strong><small>reference: ${formatFreq(aModal.f1)}; FEM: ${formatFreq(state.mode.frequency)}</small></div>
       <div class="check"><span>Equilibrium</span><strong class="${state.result.converged?'good-text':'warn-text'}">${state.result.converged?'converged':'check load'}</strong><small>${state.result.iterations} Newton iterations over load steps</small></div>`;
   } else {
     const slender=p.length/p.thickness;
@@ -145,6 +146,10 @@ function updateWarnings(p){
   const warnings=[];
   if(slender<12) warnings.push('low L/t: shear deformation omitted');
   if(strainLike>0.005) warnings.push('high elastic strain: beam assumptions may be stressed');
+  if(p.creep?.active && p.material.creep){
+    const sm=state.metrics.maxStress/1e6, [lo,hi]=p.material.creep.stressRangeMPa;
+    if(sm<lo || sm>hi) warnings.push(`PLA creep fit calibrated at ${lo}–${hi} MPa; current peak is ${sm.toFixed(1)} MPa`);
+  }
   if(!state.result.converged) warnings.push('nonlinear equilibrium not reached');
   ui.warningText.textContent=warnings.join(' · ');
 }
