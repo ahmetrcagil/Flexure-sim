@@ -1,4 +1,4 @@
-import { makeMaterial, buildModel, solveStatic, firstMode, modelMetrics, beamAnalytical, deformedElementPoints } from './solver.js';
+import { makeMaterial, creepEquivalentModulus, buildModel, solveStatic, firstMode, modelMetrics, beamAnalytical, deformedElementPoints } from './solver.js';
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -6,9 +6,9 @@ const svg = $('#simSvg');
 const state = { example:'beam', model:null, result:null, mode:null, metrics:null, raf:null, lastSolveToken:0, loadByExample:{beam:0.2,crossed:20,parallelogram:1} };
 
 const ui = {
-  length:$('#length'), thickness:$('#thickness'), width:$('#width'), spacing:$('#spacing'), mesh:$('#mesh'), material:$('#material'), load:$('#load'), deformScale:$('#deformScale'), animateMode:$('#animateMode'),
+  length:$('#length'), thickness:$('#thickness'), width:$('#width'), spacing:$('#spacing'), mesh:$('#mesh'), material:$('#material'), load:$('#load'), deformScale:$('#deformScale'), animateMode:$('#animateMode'), creepEnabled:$('#creepEnabled'), creepTime:$('#creepTime'),
   lengthOut:$('#lengthOut'), thicknessOut:$('#thicknessOut'), widthOut:$('#widthOut'), spacingOut:$('#spacingOut'), meshOut:$('#meshOut'), loadOut:$('#loadOut'), scaleOut:$('#scaleOut'),
-  loadLabel:$('#loadLabel'), spacingField:$('#spacingField'), solverPill:$('#solverPill'), sceneTitle:$('#sceneTitle'), sceneSubtitle:$('#sceneSubtitle'), exampleHelp:$('#exampleHelp'), theoryText:$('#theoryText'), validationContent:$('#validationContent'), warningText:$('#warningText'), interactionHint:$('#interactionHint'),
+  loadLabel:$('#loadLabel'), spacingField:$('#spacingField'), solverPill:$('#solverPill'), sceneTitle:$('#sceneTitle'), sceneSubtitle:$('#sceneSubtitle'), exampleHelp:$('#exampleHelp'), theoryText:$('#theoryText'), validationContent:$('#validationContent'), warningText:$('#warningText'), interactionHint:$('#interactionHint'), creepPanel:$('#creepPanel'), creepTimeOut:$('#creepTimeOut'), creepModelNote:$('#creepModelNote'), creepEffE:$('#creepEffE'), creepFactor:$('#creepFactor'),
   dispMetric:$('#dispMetric'), stressMetric:$('#stressMetric'), freqMetric:$('#freqMetric'), stiffMetric:$('#stiffMetric'), stiffnessLabel:$('#stiffnessLabel'), eValue:$('#eValue'), rhoValue:$('#rhoValue'),
 };
 
@@ -32,6 +32,8 @@ const exampleText = {
 
 function params(){
   const mat=makeMaterial(ui.material.value);
+  const creepSeconds=ui.creepEnabled?.checked ? creepSecondsFromSlider(+ui.creepTime.value) : 0;
+  const creep=creepEquivalentModulus(mat, creepSeconds);
   return {
     length:+ui.length.value/1000,
     thickness:+ui.thickness.value/1000,
@@ -39,7 +41,7 @@ function params(){
     spacing:+ui.spacing.value/1000,
     mesh:+ui.mesh.value,
     load: state.example==='crossed' ? +ui.load.value/1000 : +ui.load.value,
-    E:mat.E, rho:mat.rho, material:mat,
+    E:creep.E, rho:mat.rho, material:mat, creepSeconds, creep,
   };
 }
 
@@ -68,8 +70,16 @@ function syncOutputs(){
   ui.meshOut.textContent=`${ui.mesh.value} / leaf`;
   ui.scaleOut.textContent=`${(+ui.deformScale.value).toFixed(2)}×`;
   ui.loadOut.textContent=state.example==='crossed'?`${(+ui.load.value).toFixed(0)} N·mm`:`${(+ui.load.value).toFixed(2)} N`;
-  ui.eValue.textContent=`${(p.E/1e9).toFixed(1)} GPa`;
+  ui.eValue.textContent=`${(p.material.E/1e9).toFixed(2)} GPa`;
   ui.rhoValue.textContent=`${p.rho.toFixed(0)} kg/m³`;
+  const hasCreep=!!p.material.creep;
+  ui.creepPanel?.classList.toggle('disabled-panel',!hasCreep);
+  if(ui.creepEnabled){ ui.creepEnabled.disabled=!hasCreep; if(!hasCreep) ui.creepEnabled.checked=false; }
+  if(ui.creepTime) ui.creepTime.disabled=!hasCreep || !ui.creepEnabled.checked;
+  if(ui.creepTimeOut) ui.creepTimeOut.textContent=formatDuration(p.creepSeconds);
+  if(ui.creepEffE) ui.creepEffE.textContent=hasCreep?`${(p.E/1e9).toFixed(3)} GPa`:'—';
+  if(ui.creepFactor) ui.creepFactor.textContent=hasCreep?`${p.creep.factor.toFixed(3)}×`:'1.000×';
+  if(ui.creepModelNote) ui.creepModelNote.textContent=hasCreep?'Burgers model; calibrated for untreated 0°-raster FDM PLA at 27 °C, 8–12 MPa, 0–1800 s.':'No room-temperature creep law is assigned to this preset in v1.';
   ui.loadLabel.childNodes[0].nodeValue=state.example==='crossed'?'Applied torque ':'Applied force ';
 }
 
@@ -215,6 +225,8 @@ function stressColor(r){
   const x=Math.max(0,Math.min(.9999,r))*3, i=Math.floor(x), f=x-i, a=stops[i],b=stops[Math.min(3,i+1)];
   return `rgb(${Math.round(a[0]+(b[0]-a[0])*f)},${Math.round(a[1]+(b[1]-a[1])*f)},${Math.round(a[2]+(b[2]-a[2])*f)})`;
 }
+function creepSecondsFromSlider(v){ return Math.max(0,Math.min(1800,v)); }
+function formatDuration(s){ if(s<60)return `${s.toFixed(0)} s`; return `${(s/60).toFixed(s<600?1:0)} min`; }
 function niceLength(mm){ const p=10**Math.floor(Math.log10(Math.max(1e-9,mm))),n=mm/p; return (n<2?1:n<5?2:n<10?5:10)*p; }
 function formatLength(m){ const a=Math.abs(m); if(a<1e-6)return `${(m*1e9).toFixed(1)} nm`; if(a<1e-3)return `${(m*1e6).toFixed(2)} µm`; return `${(m*1e3).toFixed(3)} mm`; }
 function formatStress(pa){ if(pa<1e6)return `${(pa/1e3).toFixed(1)} kPa`; return `${(pa/1e6).toFixed(1)} MPa`; }
@@ -226,11 +238,12 @@ $$('.example-btn').forEach(btn=>btn.addEventListener('click',()=>{
   $$('.example-btn').forEach(b=>b.classList.toggle('active',b===btn));
   configureForExample(); queueSolve();
 }));
-[ui.length,ui.thickness,ui.width,ui.spacing,ui.mesh,ui.material,ui.load,ui.deformScale].forEach(el=>el.addEventListener('input',()=>{
+[ui.length,ui.thickness,ui.width,ui.spacing,ui.mesh,ui.material,ui.load,ui.deformScale,ui.creepTime].forEach(el=>el.addEventListener('input',()=>{
   if(el===ui.load) state.loadByExample[state.example]=+ui.load.value;
   if(el===ui.deformScale && state.model){syncOutputs();draw(performance.now());return;}
   queueSolve();
 }));
 ui.animateMode.addEventListener('change',ensureAnimation);
+ui.creepEnabled?.addEventListener('change',queueSolve);
 configureForExample();
 runSolve();
