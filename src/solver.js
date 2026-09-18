@@ -5,9 +5,31 @@ export function makeMaterial(key) {
     al7075: { name: 'Al 7075-T6', E: 71.7e9, rho: 2810 },
     steel17: { name: '17-4PH steel', E: 197e9, rho: 7800 },
     ti64: { name: 'Ti-6Al-4V', E: 114e9, rho: 4430 },
-    pla: { name: 'PLA (nominal bulk)', E: 3.5e9, rho: 1240 },
+    pla: {
+      name: 'PLA (FDM 0°, 27 °C)', E: 3.30e9, rho: 1240,
+      creep: {
+        model: 'burgers',
+        calibratedSeconds: 1800,
+        stressRangeMPa: [8, 12],
+        EM: 3.30e9,
+        EK: 1.529e9,
+        etaM: 20.24e6 * 1e6,
+        etaK: 15500 * 1e6,
+      },
+    },
   };
   return materials[key] ?? materials.al7075;
+}
+
+export function creepEquivalentModulus(material, seconds = 0) {
+  const c = material?.creep;
+  if (!c || c.model !== 'burgers' || !(seconds > 0)) {
+    return { E: material.E, compliance: 1 / material.E, factor: 1, active: false };
+  }
+  const t = Math.max(0, seconds);
+  const J = 1 / c.EM + (1 / c.EK) * (1 - Math.exp(-c.EK * t / c.etaK)) + t / c.etaM;
+  const E = 1 / J;
+  return { E, compliance: J, factor: material.E / E, active: true };
 }
 
 export function buildModel(kind, p) {
