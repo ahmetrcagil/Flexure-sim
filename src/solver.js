@@ -5,6 +5,7 @@ export function makeMaterial(key) {
     al7075: { name: 'Al 7075-T6', E: 71.7e9, rho: 2810 },
     steel17: { name: '17-4PH steel', E: 197e9, rho: 7800 },
     ti64: { name: 'Ti-6Al-4V', E: 114e9, rho: 4430 },
+    pla: { name: 'PLA (nominal bulk)', E: 3.5e9, rho: 1240 },
   };
   return materials[key] ?? materials.al7075;
 }
